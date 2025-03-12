@@ -28,15 +28,17 @@ git push origin feature/fronted   #这里的 feature/fronted 是你们干活的�
 如何合并到主分支
 
 ```
-git checkout main  #切换到主分支,如果main分支不行就换master
+git checkout master 
 git merge feature/fronted #将你分支的代码合并到主分支
-git push origin main  #推送到github上，同理，main不行换master
+git push origin master 
 ```
 
 如何更新代码
 
 ```
-git pull origin main 
+git pull origin master #从github更新你的本地代码
 docker-compose down
 docker-compose up -d  # 重新构建镜像
 ```
+
+所以总结你干活的时候，一定要先更新代码，看看别人更新的，要不你俩写的代码会冲突，然后进行开发，开发完成后提交，因为你提交的是fronted分支，所以当你的功能开发的差不多的时候就可以合并到主分支
