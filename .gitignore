@@ -32,3 +32,4 @@ Thumbs.db
 
 # 本地配置
 .local.env
+backend/service-account.json
