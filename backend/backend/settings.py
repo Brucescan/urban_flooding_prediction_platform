@@ -1,8 +1,9 @@
 import os  # 添加此行以导入 os 模块
-
+from pathlib import Path
 
 SECRET_KEY = 'l1(5s5y%@(zi!vrhf3!sd)h8cyb%=5bbzq^l4bcto1h*vwo+ab'  # 添加此行以设置 SECRET_KEY
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = Path(__file__).resolve().parent.parent
 DEBUG = True
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -11,11 +12,14 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    'django.contrib.gis',
     'user_api',
     'rest_framework.authtoken',
     'corsheaders',  # 添加此行以启用 CORS 中间件
     'rest_framework',
     'drf_yasg',
+    'geodata',
+    'data_pipeline'
 ]
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'your_domain.com']  # 根据实际情况添加域名或IP地址
@@ -36,7 +40,7 @@ ROOT_URLCONF = 'backend.urls'  # 添加此行以指定根URL配置模块
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -48,6 +52,7 @@ TEMPLATES = [
         },
     },
 ]
+WSGI_APPLICATION = 'backend.wsgi.application'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -81,7 +86,7 @@ REST_FRAMEWORK = {
 # docker数据库配置
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': 'django.contrib.gis.db.backends.postgis',
         'NAME': os.getenv('POSTGRES_DB', 'mydb'),
         'USER': os.getenv('POSTGRES_USER', 'postgres'),
         'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgres'),
@@ -91,9 +96,9 @@ DATABASES = {
 }
 STATIC_URL = '/static/'
 STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, "static"),
+    BASE_DIR / 'static',
 ]
-STATIC_ROOT = os.path.join(BASE_DIR, 'static_collected')
+STATIC_ROOT = BASE_DIR / 'static_collected'
 # STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
 # 本地开发数据配置
 # DATABASES = {
@@ -113,3 +118,18 @@ CORS_ORIGIN_ALLOW_ALL = True
 #     "http://localhost:3000",  # 根据实际情况添加前端应用的域名或IP地址
 #     "http://127.0.0.1:3000",
 # ]
+
+
+# Celery配置
+CELERY_BROKER_URL = 'redis://redis:6379/0'
+CELERY_RESULT_BACKEND = 'redis://redis:6379/1'
+
+# GeoDjango配置
+GDAL_LIBRARY_PATH = '/usr/lib/libgdal.so'
+GEOS_LIBRARY_PATH = '/usr/lib/libgeos_c.so'
+
+# MinIO配置
+MINIO_STORAGE_ENDPOINT = 'minio:9000'
+MINIO_STORAGE_ACCESS_KEY = 'minio_user'
+MINIO_STORAGE_SECRET_KEY = 'minio_password'
+DEFAULT_FILE_STORAGE = 'minio_storage.storage.MinioMediaStorage'

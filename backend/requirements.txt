@@ -3,3 +3,13 @@ djangorestframework==3.15.2
 psycopg2-binary==2.9.10
 django-cors-headers==4.6.0
 drf-yasg==1.21.10
+celery[redis]
+django-minio-storage
+numpy==1.23.5  # 固定兼容版本
+pygdal==3.4.1.10  # 需与libgdal-dev版本匹配（此处对应GDAL 3.6.5）
+earthengine-api>=0.1.357
+requests
+urllib3==2.2.3
+geopandas
+geemap
+geedim
