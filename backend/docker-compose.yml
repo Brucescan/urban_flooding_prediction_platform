@@ -8,7 +8,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d/  # 新增挂载初始化脚本
 
   redis:
@@ -26,13 +26,14 @@ services:
       MINIO_ROOT_USER: minio_user
       MINIO_ROOT_PASSWORD: minio_password
     volumes:
-      - miniodata:/data
+      - minio_data:/data
 
   web:
     build: .
-    command: python manage.py runserver 0.0.0.0:8000
+    entrypoint: /usr/local/bin/wait-for-db.sh
+    command: [ "/opt/rgee-venv/bin/python", "manage.py", "runserver", "0.0.0.0:8000" ]
     volumes:
-      - .:/app
+      - .:/app/code  # 避免覆盖系统目录
     ports:
       - "8000:8000"
     depends_on:
@@ -40,16 +41,43 @@ services:
       - redis
       - minio
     environment:
+      PATH: "/opt/rgee-venv/bin:/usr/local/bin:/usr/bin:/bin"  # 确保系统路径
       POSTGRES_DB: mydb
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       DJANGO_SUPERUSER_USERNAME: admin
       DJANGO_SUPERUSER_PASSWORD: 123456
       DJANGO_SUPERUSER_EMAIL: admin@admin.com
-
+  beat:
+    build: .
+    command: [
+      "celery", "-A", "config", "beat",
+      "--loglevel=info",
+      "--scheduler=celery.beat.PersistentScheduler",
+      "--pidfile=/tmp/celerybeat.pid",
+      "--schedule=/var/lib/celery/celerybeat-schedule"  # 持久化存储
+    ]
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=backend.settings
+      - TZ=Asia/Shanghai  # 设置时区（与 crontab 匹配）
+    volumes:
+      - ./celery:/app/celery  # 仅挂载必要目录
+      - celery_data:/var/lib/celery  # 持久化卷
+  worker:
+    build: .
+    command: [ "celery", "-A", "backend", "worker", "--loglevel=info" ]
+    depends_on:
+      - redis
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=backend.settings
 volumes:
-  pgdata:
-  miniodata:
+  pg_data:
+  minio_data:
+  celery_data:
 
 
 

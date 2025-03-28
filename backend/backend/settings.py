@@ -120,13 +120,10 @@ CORS_ORIGIN_ALLOW_ALL = True
 # ]
 
 
-# Celery配置
+# Celery 配置
 CELERY_BROKER_URL = 'redis://redis:6379/0'
-CELERY_RESULT_BACKEND = 'redis://redis:6379/1'
-
-# GeoDjango配置
-GDAL_LIBRARY_PATH = '/usr/lib/libgdal.so'
-GEOS_LIBRARY_PATH = '/usr/lib/libgeos_c.so'
+CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+CELERY_TIMEZONE = 'Asia/Shanghai'
 
 # MinIO配置
 MINIO_STORAGE_ENDPOINT = 'minio:9000'

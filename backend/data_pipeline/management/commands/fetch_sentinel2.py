@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = '下载河南省MOD13A3 NDVI数据'
+    help = 'NDVI数据'
 
     def add_arguments(self, parser):
         parser.add_argument('--output',
                             type=str,
-                            default='./test/data',
+                            default='./data_pipeline/data/ndvi',
                             help='输出目录（相对项目根目录）')
         parser.add_argument('--service-account',  # 新增参数
                             type=str,
@@ -26,7 +26,6 @@ class Command(BaseCommand):
         # 路径解析
         base_dir = Path(__file__).resolve().parent.parent.parent
         output_dir = (base_dir / kwargs['output']).resolve()
-        output_dir.mkdir(parents=True, exist_ok=True)
 
         # 显式传递服务账户路径
         self.service_account = Path(kwargs['service_account']).resolve()
@@ -66,14 +65,14 @@ class Command(BaseCommand):
 
         # 时间范围调整为滚动窗口（确保数据新鲜）
         today = datetime.now()
-        start_date = (today - timedelta(days=45)).strftime('%Y-%m-%d')  # 延长至45天
+        start_date = (today - timedelta(days=7)).strftime('%Y-%m-%d')  # 延长至45天
         end_date = today.strftime('%Y-%m-%d')
 
         # 数据加载与过滤
         s2_collection = ee.ImageCollection(dataset_path) \
             .filterDate(start_date, end_date) \
             .filterBounds(valid_geometry) \
-            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 15))  # 更严格云量过滤
+            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))  # 更严格云量过滤
 
         # 云掩膜处理（网页2增强版）
         def cloud_masking(element):
@@ -135,8 +134,9 @@ class Command(BaseCommand):
         # 若为空图像则抛出异常
         if not image.bandNames().size().gt(0).getInfo():
             raise ValueError("生成图像为空，请检查输入数据")
-        filename = f"beijing_ndvi_{datetime.now().strftime('%Y%m%d')}.tif"
+        filename = f"beijing_ndvi_{datetime.now().strftime('%Y%m%d')}"
         output_path = output_dir / filename
+        output_path.mkdir(parents=True, exist_ok=True)
 
         # 从get_sentinel2_data获取边界
         valid_geometry = self.get_sentinel2_data().geometry()
@@ -152,9 +152,10 @@ class Command(BaseCommand):
             image=image,
             # filename=str(output_path),
             # region=image.geometry(),
-            scale=100,  # 分辨率改为10米（网页1）
+            scale=10,  # 分辨率改为10米（网页1）
             crs='EPSG:4526',  # 中国专用投影坐标系
             num_threads=10,
             # quiet=True,
             features=fishnet,
+            out_dir=output_dir,
         )
