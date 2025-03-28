@@ -1,3 +1,5 @@
+import json
+
 import ee
 import geemap
 import os
@@ -60,8 +62,8 @@ class Command(BaseCommand):
     def get_sentinel2_data(self):
         """修复后的Sentinel-2 NDVI逻辑"""
         dataset_path = 'COPERNICUS/S2_SR_HARMONIZED'
-        henan = ee.FeatureCollection("projects/ee-brucepengyuan/assets/he_nan")
-        valid_geometry = henan.geometry().bounds()
+        bei_jing = ee.FeatureCollection("projects/ee-brucepengyuan/assets/bei_jing")
+        valid_geometry = bei_jing.geometry().bounds()
 
         # 时间范围调整为滚动窗口（确保数据新鲜）
         today = datetime.now()
@@ -134,14 +136,30 @@ class Command(BaseCommand):
         # 若为空图像则抛出异常
         if not image.bandNames().size().gt(0).getInfo():
             raise ValueError("生成图像为空，请检查输入数据")
-        filename = f"beijing_ndvi_{datetime.now().strftime('%Y%m%d')}"
-        output_path = output_dir / filename
-        output_path.mkdir(parents=True, exist_ok=True)
+        # filename = f"beijing_ndvi_{datetime.now().strftime('%Y%m%d')}"
+        # output_path = output_dir / filename
+        # output_path.mkdir(parents=True, exist_ok=True)
 
         # 从get_sentinel2_data获取边界
         valid_geometry = self.get_sentinel2_data().geometry()
 
-        # 生成鱼网分块（关键步骤）[2,5](@ref)
+        # 创建日期子目录
+        date_str = datetime.now().strftime('%Y%m%d')
+        output_path = output_dir / date_str
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # 生成元数据文件
+        metadata = {
+            'generated_at': datetime.now().isoformat(),
+            'data_source': 'Sentinel-2',
+            'bands': image.bandNames().getInfo(),
+            'crs': 'EPSG:4526',
+            'resolution': '10m'
+        }
+        with open(output_path / 'metadata.json', 'w') as f:
+            json.dump(metadata, f)
+
+        # 下载分块
         fishnet = geemap.fishnet(
             valid_geometry,
             rows=8,
@@ -150,12 +168,11 @@ class Command(BaseCommand):
         )
         geemap.download_ee_image_tiles(
             image=image,
-            # filename=str(output_path),
-            # region=image.geometry(),
-            scale=10,  # 分辨率改为10米（网页1）
-            crs='EPSG:4526',  # 中国专用投影坐标系
+            scale=10,
+            crs='EPSG:4526',
             num_threads=10,
-            # quiet=True,
             features=fishnet,
-            out_dir=output_dir,
+            out_dir=output_path,  # 存放到日期子目录
         )
+        print("数据已经存储在"+output_path)
+        return output_path  # 返回生成的路径
