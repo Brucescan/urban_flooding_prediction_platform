@@ -17,3 +17,11 @@ docker-compose up -d #后台运行
 用户文档接口
 
 http://localhost:8000/api/users/redoc/或者http://localhost:8000/api/users/swagger/
+
+ndvi数据接口
+
+http://localhost:8000/api/geodata/ndvi/
+
+ndvi下载接口
+
+http://localhost:8000/api/geodata/<int:pk>/download/

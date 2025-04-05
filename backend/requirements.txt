@@ -13,3 +13,6 @@ urllib3==2.2.3
 geopandas
 geemap
 geedim
+pillow
+fasteners
+django-redis

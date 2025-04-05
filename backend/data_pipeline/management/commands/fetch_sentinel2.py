@@ -1,15 +1,17 @@
 import json
-
 import ee
 import geemap
-import os
 from datetime import datetime, timedelta
 import logging
 from django.core.management.base import BaseCommand
 from pathlib import Path
+from geodata.models import NDVIData  # 根据你的实际应用调整导入路径
+from django.core.files import File
+import numpy as np
+from PIL import Image
+from osgeo import gdal
 
 logger = logging.getLogger(__name__)
-
 
 class Command(BaseCommand):
     help = 'NDVI数据'
@@ -105,15 +107,10 @@ class Command(BaseCommand):
                 rightField='system:index'
             )
         )
-        print("Joined集合首个元素类型:",
-              ee.Algorithms.ObjectType(joined_collection.first()).getInfo())  # 应显示Feature
-
         # 应用处理并计算NDVI
         # processed_images = joined_collection.map(process_joined_element)
         processed_images = ee.ImageCollection(joined_collection.map(cloud_masking)) \
             .filter(ee.Filter.neq('system:band_names', None))
-        print("处理后集合首个元素类型:",
-              ee.Algorithms.ObjectType(processed_images.first()).getInfo())  # 应显示Image
 
         # NDVI计算（类型安全）
         ndvi_collection = processed_images.map(
@@ -129,9 +126,6 @@ class Command(BaseCommand):
 
     def export_ndvi(self, image, output_dir):
         """增强导出稳定性"""
-        # 检查图像元数据
-        print("波段信息:", image.bandNames().getInfo())  # 应显示['NDVI']
-        print("非空检查:", image.bandNames().size().gt(0).getInfo())  # 应返回True
 
         # 若为空图像则抛出异常
         if not image.bandNames().size().gt(0).getInfo():
@@ -159,20 +153,399 @@ class Command(BaseCommand):
         with open(output_path / 'metadata.json', 'w') as f:
             json.dump(metadata, f)
 
+        self.stdout.write("开始下载分块数据...")
         # 下载分块
-        fishnet = geemap.fishnet(
+        full_fishnet = geemap.fishnet(
             valid_geometry,
             rows=8,
             cols=6,
-            delta=0.5
+            delta=0.5,
+            crs='EPSG:4526'  # 显式指定坐标系
         )
-        geemap.download_ee_image_tiles(
-            image=image,
-            scale=10,
-            crs='EPSG:4526',
-            num_threads=10,
-            features=fishnet,
-            out_dir=output_path,  # 存放到日期子目录
+        fishnet_features = full_fishnet.toList(2)  # 仅获取前两个特征
+        partial_fishnet = ee.FeatureCollection(fishnet_features)
+        image = image.setDefaultProjection(crs='EPSG:4526', scale=10)
+        # 检查输出目录是否创建成功
+        if not output_path.exists():
+            output_path.mkdir(parents=True, exist_ok=True)
+        # 执行下载并验证结果
+        download_result = self.download_and_validate_tiles(
+            image=image.clip(valid_geometry),
+            output_path=output_path,
+            fishnet=partial_fishnet
         )
-        print("数据已经存储在"+output_path)
-        return output_path  # 返回生成的路径
+
+        if not download_result:
+            raise RuntimeError("分块下载验证失败")
+
+        # 保存到数据库
+        self.save_to_database(image, output_path, metadata)
+
+        return output_path
+
+    def download_and_validate_tiles(self, image, output_path, fishnet):
+        """改进后的下载和验证方法"""
+        try:
+            # 清理输出目录
+            for f in output_path.glob('*.tif'):
+                try:
+                    f.unlink()
+                except:
+                    pass
+
+            # 获取预期分块数
+            expected_tiles = fishnet.size().getInfo() if hasattr(fishnet, 'size') else 2
+
+            # 使用更可靠的下载方法
+            self.stdout.write(f"开始下载{expected_tiles}个分块...")
+
+
+            self.stdout.write(f"geemap下载")
+            # 方法2：逐个分块下载
+            for i, feature in enumerate(fishnet.getInfo()['features']):
+                region = ee.Feature(feature).geometry()
+                filename = f"tile_{i + 1}.tif"
+                self.stdout.write(f"下载分块 {i + 1}/{expected_tiles}...")
+
+                try:
+                    geemap.download_ee_image(
+                        image=image.clip(region),
+                        filename=str(output_path / filename),
+                        scale=10,
+                        crs='EPSG:4526',
+                        region=region,
+                    )
+                except Exception as e:
+                    self.stdout.write(f"分块 {i + 1} 下载失败: {str(e)}")
+                    raise
+
+            # 验证下载的文件
+            tile_files = sorted(output_path.glob('*.tif'))
+            if len(tile_files) != expected_tiles:
+                raise RuntimeError(f"下载文件数量不匹配: 期望 {expected_tiles}, 实际 {len(tile_files)}")
+
+            # 详细验证每个文件
+            for tile in tile_files:
+                if not self._validate_tile_completely(tile):
+                    raise RuntimeError(f"文件验证失败: {tile.name}")
+
+            return True
+
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"下载验证失败: {str(e)}"))
+            # 输出详细的调试信息
+            self._debug_download_status(output_path)
+            return False
+
+    def _validate_tile_completely(self, tile_path):
+        """更全面的文件验证"""
+        try:
+            # 检查文件基本属性
+            if not tile_path.exists() or tile_path.stat().st_size < 1024:  # 至少1KB
+                return False
+
+            # 检查GDAL是否能打开
+            ds = gdal.Open(str(tile_path))
+            if ds is None:
+                return False
+
+            # 检查波段
+            band = ds.GetRasterBand(1)
+            if band is None:
+                ds = None
+                return False
+
+            # 检查统计数据
+            try:
+                stats = band.GetStatistics(True, True)
+                if stats is None or len(stats) != 4:
+                    ds = None
+                    return False
+            except:
+                ds = None
+                return False
+
+            # 尝试读取少量数据
+            try:
+                sample = band.ReadAsArray(0, 0, 10, 10)
+                if sample is None:
+                    ds = None
+                    return False
+            except:
+                ds = None
+                return False
+
+            ds = None
+            return True
+        except:
+            return False
+
+    def _debug_download_status(self, output_path):
+        """输出下载状态调试信息"""
+        self.stdout.write("\n=== 下载调试信息 ===")
+        self.stdout.write(f"输出目录内容: {[f.name for f in output_path.glob('*')]}")
+
+        for tif_file in output_path.glob('*.tif'):
+            self.stdout.write(f"\n文件: {tif_file.name}")
+            self.stdout.write(f"大小: {tif_file.stat().st_size} 字节")
+
+            try:
+                with open(tif_file, 'rb') as f:
+                    header = f.read(100)
+                    self.stdout.write(f"文件头: {header[:20].hex()}...")
+            except Exception as e:
+                self.stdout.write(f"读取文件头失败: {str(e)}")
+
+    def save_to_database(self, ee_image, output_path, metadata):
+        """将NDVI数据保存到数据库"""
+        from django.conf import settings
+        from django.db import transaction
+        from django.core.exceptions import ObjectDoesNotExist
+
+        try:
+            self.stdout.write("分块下载完成，开始合并...")
+            temp_tif = output_path / 'merged.tif'
+            self.merge_tiles(output_path, temp_tif)
+
+            self.stdout.write("合并完成，计算统计数据...")
+            stats, coverage = self.calculate_stats(temp_tif)
+
+            # 修正特殊值
+            def fix_float(value):
+                return None if value in (float('-inf'), float('inf'), float('nan')) else value
+            self.stdout.write("生成缩略图...")
+            thumbnail_path = output_path / 'thumbnail.png'
+            self.generate_thumbnail(temp_tif, thumbnail_path)
+
+            self.stdout.write("保存到数据库...")
+            date_str = output_path.name
+            rel_path = output_path.relative_to(settings.BASE_DIR)
+
+            # 使用事务确保数据一致性
+            with transaction.atomic():
+                # 检查是否已存在相同日期的记录
+                try:
+                    existing_data = NDVIData.objects.get(name=f"beijing_ndvi_{date_str}")
+                    self.stdout.write(self.style.WARNING(f"数据已存在，将更新记录: {existing_data.id}"))
+
+                    # 更新现有记录
+                    with open(thumbnail_path, 'rb') as thumb_file:
+                        existing_data.acquisition_date = datetime.strptime(date_str, '%Y%m%d').date()
+                        existing_data.resolution = 10.0
+                        existing_data.data_dir = str(rel_path)
+                        existing_data.min_value = stats['min']
+                        existing_data.max_value = stats['max']
+                        existing_data.mean_value = stats['mean']
+                        existing_data.coverage = coverage
+                        existing_data.metadata = metadata
+
+                        # 删除旧的缩略图
+                        if existing_data.thumbnail:
+                            existing_data.thumbnail.delete()
+
+                        # 保存新缩略图
+                        existing_data.thumbnail.save(
+                            f"ndvi_thumb_{date_str}.png",
+                            File(thumb_file)
+                        )
+
+                        existing_data.save()
+                        ndvi_data = existing_data
+
+                except NDVIData.DoesNotExist:
+                    # 创建新记录
+                    with open(thumbnail_path, 'rb') as thumb_file:
+                        ndvi_data = NDVIData(
+                            name=f"beijing_ndvi_{date_str}",
+                            acquisition_date=datetime.strptime(date_str, '%Y%m%d').date(),
+                            resolution=10.0,
+                            data_dir=str(rel_path),
+                            min_value=fix_float(stats['min']),
+                            max_value=fix_float(stats['max']),
+                            mean_value=fix_float(stats['mean']),
+                            coverage=coverage,
+                            metadata=metadata
+                        )
+                        ndvi_data.thumbnail.save(
+                            f"ndvi_thumb_{date_str}.png",
+                            File(thumb_file)
+                        )
+                        ndvi_data.save()
+
+            # 清理临时文件
+            temp_tif.unlink()
+            self.stdout.write(self.style.SUCCESS("保存成功！"))
+
+            return ndvi_data
+
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"保存到数据库失败: {str(e)}"))
+            raise RuntimeError(f"Database save failed: {str(e)}")
+
+    def merge_tiles(self, tile_dir, output_path):
+        """修正后的合并分块方法"""
+        from osgeo import gdal
+        import glob
+
+        # 获取所有分块文件
+        tile_files = sorted(tile_dir.glob('*.tif'))
+        if not tile_files:
+            raise ValueError("未找到分块文件")
+
+        # 准备文件列表
+        file_list = [str(f) for f in tile_files]
+
+        # 方法1：使用新API（GDAL >= 2.1）
+        try:
+            # 创建VRT
+            vrt_path = str(output_path.with_suffix('.vrt'))
+            vrt = gdal.BuildVRT(
+                destName=vrt_path,
+                srcDSOrSrcDSTab=file_list,
+                options=gdal.BuildVRTOptions(resampleAlg='near', addAlpha=False)
+            )
+
+            if vrt is None:
+                raise RuntimeError("无法构建VRT文件")
+
+            # 转换为实际TIFF
+            dataset = gdal.Translate(
+                destName=str(output_path),
+                srcDS=vrt,
+                options=gdal.TranslateOptions(
+                    format='GTiff',
+                    creationOptions=['COMPRESS=LZW', 'TILED=YES']
+                )
+            )
+
+            # 清理资源
+            vrt = None
+            dataset = None
+
+            # 删除临时VRT文件
+            Path(vrt_path).unlink(missing_ok=True)
+            return True
+
+        except Exception as e:
+            # 方法1失败时尝试方法2
+            self.stdout.write(f"VRT方法失败，尝试直接合并: {str(e)}")
+            return self.merge_tiles_direct(tile_files, output_path)
+
+    def merge_tiles_direct(self, tile_files, output_path):
+        """直接合并方法（备用方案）"""
+        from osgeo import gdal
+
+        # 使用第一个分块作为模板
+        src_ds = gdal.Open(str(tile_files[0]))
+        driver = gdal.GetDriverByName('GTiff')
+
+        # 创建输出文件
+        dst_ds = driver.CreateCopy(
+            str(output_path),
+            src_ds,
+            0,
+            options=['COMPRESS=LZW', 'TILED=YES']
+        )
+
+        # 合并所有分块
+        for tile in tile_files[1:]:
+            temp_ds = gdal.Open(str(tile))
+            if temp_ds is None:
+                continue
+
+            # 计算偏移量（确保不越界）
+            src_transform = temp_ds.GetGeoTransform()
+            dst_transform = dst_ds.GetGeoTransform()
+
+            xoff = int((src_transform[0] - dst_transform[0]) / dst_transform[1])
+            yoff = int((dst_transform[3] - src_transform[3]) / abs(dst_transform[5]))
+
+            # 确保偏移量有效
+            if xoff < 0 or yoff < 0:
+                continue
+
+            # 确保读取范围不超过目标范围
+            xsize = min(temp_ds.RasterXSize, dst_ds.RasterXSize - xoff)
+            ysize = min(temp_ds.RasterYSize, dst_ds.RasterYSize - yoff)
+
+            if xsize <= 0 or ysize <= 0:
+                continue
+
+            # 执行合并
+            data = temp_ds.GetRasterBand(1).ReadAsArray()
+            dst_ds.GetRasterBand(1).WriteArray(data, xoff, yoff)
+            temp_ds = None
+
+        dst_ds.FlushCache()
+        dst_ds = None
+        src_ds = None
+        return True
+
+    def calculate_stats(self, tif_path):
+        """添加边界安全检查的计算方法"""
+        ds = gdal.Open(str(tif_path))
+        if ds is None:
+            raise ValueError(f"无法打开文件: {tif_path}")
+
+        # 获取栅格尺寸
+        width = ds.RasterXSize
+        height = ds.RasterYSize
+
+        # 限制读取范围不超过实际尺寸
+        read_width = min(3000, width)  # 示例值，根据实际情况调整
+        read_height = min(3000, height)
+
+        band = ds.GetRasterBand(1)
+
+        # 安全读取数据
+        try:
+            array = band.ReadAsArray(
+                xoff=0,
+                yoff=0,
+                win_xsize=read_width,
+                win_ysize=read_height
+            )
+        except Exception as e:
+            raise RuntimeError(f"读取栅格数据失败: {str(e)}")
+
+        # 计算统计信息
+        stats = {
+            'min': float(np.nanmin(array)),
+            'max': float(np.nanmax(array)),
+            'mean': float(np.nanmean(array)),
+            'stddev': float(np.nanstd(array))
+        }
+
+        # 获取空间范围（修正负值问题）
+        transform = ds.GetGeoTransform()
+        x_min = max(transform[0], 0)  # 确保不小于0
+        y_max = max(transform[3], 0)
+        x_max = x_min + transform[1] * width
+        y_min = y_max + transform[5] * height
+
+        from django.contrib.gis.geos import Polygon
+        coverage = Polygon.from_bbox((
+            max(x_min, 0),
+            max(y_min, 0),
+            max(x_max, 0),
+            max(y_max, 0)
+        ))
+
+        ds = None  # 关闭数据集
+
+        return stats, coverage
+
+    def generate_thumbnail(self, tif_path, output_path, size=(256, 256)):
+        """生成缩略图"""
+        ds = gdal.Open(str(tif_path))
+        band = ds.GetRasterBand(1)
+        array = band.ReadAsArray()
+
+        # 归一化处理
+        array = (array - array.min()) / (array.max() - array.min()) * 255
+        array = array.astype(np.uint8)
+
+        # 创建缩略图
+        im = Image.fromarray(array)
+        im.thumbnail(size)
+        im.save(output_path)

@@ -20,6 +20,8 @@ done
 
 # 运行 Django 迁移（跳过 makemigrations，生产环境应由 CI/CD 处理）
 /opt/rgee-venv/bin/python manage.py migrate
+/opt/rgee-venv/bin/python manage.py makemigrations
+/opt/rgee-venv/bin/python manage.py migrate
 
 # 检查并创建超级用户（安全方式）
 >&2 echo "Checking for superuser: $DJANGO_SUPERUSER_USERNAME"

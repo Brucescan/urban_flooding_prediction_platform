@@ -13,8 +13,11 @@ services:
 
   redis:
     image: redis:latest
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
 
   minio:
     image: minio/minio
@@ -50,26 +53,44 @@ services:
       DJANGO_SUPERUSER_EMAIL: admin@admin.com
   beat:
     build: .
-    command: [
-      "celery", "-A", "config", "beat",
-      "--loglevel=info",
-      "--scheduler=celery.beat.PersistentScheduler",
-      "--pidfile=/tmp/celerybeat.pid",
-      "--schedule=/var/lib/celery/celerybeat-schedule"  # 持久化存储
-    ]
+    command: |
+      bash -c '
+      # 等待Redis可用
+      while ! redis-cli -h redis ping; do sleep 2; done
+      
+      # 启动beat时先执行schema迁移
+      python manage.py migrate &&
+      celery -A backend beat \
+        --loglevel=info \
+        --schedule=/var/lib/celery/celerybeat-schedule \
+        --pidfile=/tmp/celerybeat.pid
+      '
     depends_on:
       - redis
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - DJANGO_SETTINGS_MODULE=backend.settings
-      - TZ=Asia/Shanghai  # 设置时区（与 crontab 匹配）
+      - TZ=Asia/Shanghai
     volumes:
-      - ./celery:/app/celery  # 仅挂载必要目录
-      - celery_data:/var/lib/celery  # 持久化卷
+      - ./celery:/app/celery
+      - celery_data:/var/lib/celery
   worker:
     build: .
-    command: [ "celery", "-A", "backend", "worker", "--loglevel=info" ]
+    command: |
+      bash -c '
+      # 等待数据库和Redis可用
+      while ! pg_isready -h db -U postgres; do sleep 2; done
+      while ! redis-cli -h redis ping; do sleep 2; done
+      
+      # 启动worker
+      celery -A backend worker \
+        --loglevel=info \
+        --concurrency=1 \
+        --queues=satellite_sync \
+        --hostname=satellite_sync@%%h
+      '
     depends_on:
+      - db
       - redis
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -78,6 +99,8 @@ volumes:
   pg_data:
   minio_data:
   celery_data:
+  redis_data:
+
 
 
 

@@ -1,6 +1,8 @@
 from django.urls import path
-from .views import RasterMetadataAPI
+
+from .views import NDVIListAPI, NDVIDownloadAPI
 
 urlpatterns = [
-    path('rasters/', RasterMetadataAPI.as_view(), name='raster-metadata-api'),
+    path('ndvi/', NDVIListAPI.as_view(), name='ndvi-list'),
+    path('ndvi/<int:pk>/download/', NDVIDownloadAPI.as_view(), name='ndvi-download'),
 ]

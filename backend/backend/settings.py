@@ -21,7 +21,18 @@ INSTALLED_APPS = [
     'geodata',
     'data_pipeline'
 ]
-
+# 缓存配置
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://redis:6379/1',
+    },
+    'persistent': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://redis:6379/2',
+        'TIMEOUT': None,  # 永不过期
+    }
+}
 ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'your_domain.com']  # 根据实际情况添加域名或IP地址
 
 MIDDLEWARE = [
@@ -130,3 +141,6 @@ MINIO_STORAGE_ENDPOINT = 'minio:9000'
 MINIO_STORAGE_ACCESS_KEY = 'minio_user'
 MINIO_STORAGE_SECRET_KEY = 'minio_password'
 DEFAULT_FILE_STORAGE = 'minio_storage.storage.MinioMediaStorage'
+MINIO_STORAGE_USE_HTTPS = False  # 如果使用 HTTPS 则设为 True
+MINIO_STORAGE_MEDIA_BUCKET_NAME = 'media'  # 媒体文件存储桶名称
+MINIO_STORAGE_AUTO_CREATE_MEDIA_BUCKET = True  # 自动创建桶

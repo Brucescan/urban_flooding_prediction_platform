@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     proj-data \
     curl git \
     cron \
+    redis-tools \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/bin/python \
