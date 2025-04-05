@@ -1,4 +1,5 @@
 import json
+import time
 import ee
 import geemap
 from datetime import datetime, timedelta
@@ -16,6 +17,43 @@ logger = logging.getLogger(__name__)
 class Command(BaseCommand):
     help = 'NDVI数据'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setup_logging()
+
+    def setup_logging(self):
+        # 创建logs目录（如果不存在）
+        logs_dir = Path(__file__).resolve().parent.parent.parent / "logs"
+        logs_dir.mkdir(exist_ok=True)
+
+        # 设置日志文件名（包含当前时间）
+        log_filename = f"pipline_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        log_filepath = logs_dir / log_filename
+
+        # 配置日志记录器
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+
+        # 创建文件处理器
+        file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+
+        # 添加处理器
+        self.logger.addHandler(file_handler)
+
+    def log(self, message, level=logging.INFO):
+        """统一记录日志"""
+        self.stdout.write(message)  # 保持控制台输出
+        if level == logging.INFO:
+            self.logger.info(message)
+        elif level == logging.WARNING:
+            self.logger.warning(message)
+        elif level == logging.ERROR:
+            self.logger.error(message)
+        elif level == logging.DEBUG:
+            self.logger.debug(message)
     def add_arguments(self, parser):
         parser.add_argument('--output',
                             type=str,
@@ -38,7 +76,7 @@ class Command(BaseCommand):
             self._init_gee()
             ndvi_data = self.get_sentinel2_data()
             self.export_ndvi(ndvi_data, output_dir)
-            self.stdout.write(self.style.SUCCESS(f'数据已保存至：{output_dir}'))
+            self.log(self.style.SUCCESS(f'数据已保存至：{output_dir}'))
         except Exception as e:
             logger.error(f'下载失败：{str(e)}')
             raise e  # 抛出详细错误
@@ -153,7 +191,7 @@ class Command(BaseCommand):
         with open(output_path / 'metadata.json', 'w') as f:
             json.dump(metadata, f)
 
-        self.stdout.write("开始下载分块数据...")
+        self.log("开始下载分块数据...")
         # 下载分块
         full_fishnet = geemap.fishnet(
             valid_geometry,
@@ -197,15 +235,15 @@ class Command(BaseCommand):
             expected_tiles = fishnet.size().getInfo() if hasattr(fishnet, 'size') else 2
 
             # 使用更可靠的下载方法
-            self.stdout.write(f"开始下载{expected_tiles}个分块...")
+            self.log(f"开始下载{expected_tiles}个分块...")
 
 
-            self.stdout.write(f"geemap下载")
+            self.log(f"geemap下载")
             # 方法2：逐个分块下载
             for i, feature in enumerate(fishnet.getInfo()['features']):
                 region = ee.Feature(feature).geometry()
                 filename = f"tile_{i + 1}.tif"
-                self.stdout.write(f"下载分块 {i + 1}/{expected_tiles}...")
+                self.log(f"下载分块 {i + 1}/{expected_tiles}...")
 
                 try:
                     geemap.download_ee_image(
@@ -216,7 +254,7 @@ class Command(BaseCommand):
                         region=region,
                     )
                 except Exception as e:
-                    self.stdout.write(f"分块 {i + 1} 下载失败: {str(e)}")
+                    self.log(f"分块 {i + 1} 下载失败: {str(e)}")
                     raise
 
             # 验证下载的文件
@@ -232,7 +270,7 @@ class Command(BaseCommand):
             return True
 
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"下载验证失败: {str(e)}"))
+            self.log(self.style.ERROR(f"下载验证失败: {str(e)}"))
             # 输出详细的调试信息
             self._debug_download_status(output_path)
             return False
@@ -282,19 +320,19 @@ class Command(BaseCommand):
 
     def _debug_download_status(self, output_path):
         """输出下载状态调试信息"""
-        self.stdout.write("\n=== 下载调试信息 ===")
-        self.stdout.write(f"输出目录内容: {[f.name for f in output_path.glob('*')]}")
+        self.log("\n=== 下载调试信息 ===")
+        self.log(f"输出目录内容: {[f.name for f in output_path.glob('*')]}")
 
         for tif_file in output_path.glob('*.tif'):
-            self.stdout.write(f"\n文件: {tif_file.name}")
-            self.stdout.write(f"大小: {tif_file.stat().st_size} 字节")
+            self.log(f"\n文件: {tif_file.name}")
+            self.log(f"大小: {tif_file.stat().st_size} 字节")
 
             try:
                 with open(tif_file, 'rb') as f:
                     header = f.read(100)
-                    self.stdout.write(f"文件头: {header[:20].hex()}...")
+                    self.log(f"文件头: {header[:20].hex()}...")
             except Exception as e:
-                self.stdout.write(f"读取文件头失败: {str(e)}")
+                self.log(f"读取文件头失败: {str(e)}")
 
     def save_to_database(self, ee_image, output_path, metadata):
         """将NDVI数据保存到数据库"""
@@ -303,21 +341,21 @@ class Command(BaseCommand):
         from django.core.exceptions import ObjectDoesNotExist
 
         try:
-            self.stdout.write("分块下载完成，开始合并...")
+            self.log("分块下载完成，开始合并...")
             temp_tif = output_path / 'merged.tif'
             self.merge_tiles(output_path, temp_tif)
 
-            self.stdout.write("合并完成，计算统计数据...")
+            self.log("合并完成，计算统计数据...")
             stats, coverage = self.calculate_stats(temp_tif)
 
             # 修正特殊值
             def fix_float(value):
                 return None if value in (float('-inf'), float('inf'), float('nan')) else value
-            self.stdout.write("生成缩略图...")
+            self.log("生成缩略图...")
             thumbnail_path = output_path / 'thumbnail.png'
             self.generate_thumbnail(temp_tif, thumbnail_path)
 
-            self.stdout.write("保存到数据库...")
+            self.log("保存到数据库...")
             date_str = output_path.name
             rel_path = output_path.relative_to(settings.BASE_DIR)
 
@@ -326,7 +364,7 @@ class Command(BaseCommand):
                 # 检查是否已存在相同日期的记录
                 try:
                     existing_data = NDVIData.objects.get(name=f"beijing_ndvi_{date_str}")
-                    self.stdout.write(self.style.WARNING(f"数据已存在，将更新记录: {existing_data.id}"))
+                    self.log(self.style.WARNING(f"数据已存在，将更新记录: {existing_data.id}"))
 
                     # 更新现有记录
                     with open(thumbnail_path, 'rb') as thumb_file:
@@ -374,12 +412,12 @@ class Command(BaseCommand):
 
             # 清理临时文件
             temp_tif.unlink()
-            self.stdout.write(self.style.SUCCESS("保存成功！"))
+            self.log(self.style.SUCCESS("保存成功！"))
 
             return ndvi_data
 
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"保存到数据库失败: {str(e)}"))
+            self.log(self.style.ERROR(f"保存到数据库失败: {str(e)}"))
             raise RuntimeError(f"Database save failed: {str(e)}")
 
     def merge_tiles(self, tile_dir, output_path):
@@ -428,7 +466,7 @@ class Command(BaseCommand):
 
         except Exception as e:
             # 方法1失败时尝试方法2
-            self.stdout.write(f"VRT方法失败，尝试直接合并: {str(e)}")
+            self.log(f"VRT方法失败，尝试直接合并: {str(e)}")
             return self.merge_tiles_direct(tile_files, output_path)
 
     def merge_tiles_direct(self, tile_files, output_path):

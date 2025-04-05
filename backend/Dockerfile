@@ -59,7 +59,7 @@ ENV PATH="/opt/rgee-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/
 COPY . .
 
 # 复制并设置 wait-for-db.sh
-COPY wait-for-db.sh /usr/local/bin/
+COPY ./scripts/wait-for-db.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/wait-for-db.sh
 
 EXPOSE 8000
